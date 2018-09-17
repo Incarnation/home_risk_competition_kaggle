@@ -1,0 +1,353 @@
+# coding:utf-8
+
+import os
+import re
+import numpy as np
+import pandas as pd
+import competition_utils as cu
+
+
+class PrepareApplicationTest(object):
+
+    def __init__(self, *, input_path):
+        self.__input_path = input_path
+
+        # data prepare
+        self.__application_test = None
+
+    def data_prepare(self):
+        self.__application_test = pd.read_csv(os.path.join(self.__input_path, "application_test.csv"))
+
+        # One-hot encoding for categorical columns with get_dummies
+    def one_hot_encoder(df, nan_as_category = True):
+        original_columns = list(df.__application_train.columns)
+        categorical_columns = [col for col in df.__application_train.columns if df.__application_train[col].dtype == 'object']
+        df.__application_train = pd.get_dummies(df.__application_train, columns= categorical_columns, dummy_na= nan_as_category)
+        new_columns = [c for c in df.__application_train.columns if c not in original_columns]
+        return df.__application_train, new_columns
+
+    def data_transform(self):
+        self.__application_test = cu.replace_day_outliers(self.__application_test)
+        dropcolum=['FLAG_DOCUMENT_2','FLAG_DOCUMENT_4',
+                    'FLAG_DOCUMENT_5','FLAG_DOCUMENT_6','FLAG_DOCUMENT_7',
+                    'FLAG_DOCUMENT_8','FLAG_DOCUMENT_9','FLAG_DOCUMENT_10',
+                    'FLAG_DOCUMENT_11','FLAG_DOCUMENT_12','FLAG_DOCUMENT_13',
+                    'FLAG_DOCUMENT_14','FLAG_DOCUMENT_15','FLAG_DOCUMENT_16',
+                    'FLAG_DOCUMENT_17','FLAG_DOCUMENT_18','FLAG_DOCUMENT_19',
+                    'FLAG_DOCUMENT_20','FLAG_DOCUMENT_21']
+
+        self.__application_test = self.__application_test[self.__application_test['CODE_GENDER']!='XNA']
+        self.__application_test = self.__application_test.drop(dropcolum, axis=1)
+
+        # Categorical features with Binary encode (0 or 1; two categories)
+        for bin_feature in ['CODE_GENDER', 'FLAG_OWN_CAR', 'FLAG_OWN_REALTY']:
+            self.__application_test[bin_feature], uniques = pd.factorize(self.__application_test[bin_feature])
+
+    def data_generate(self):
+        # AMT_CREDIT AMT_CREDIT AMT_GOODS_PRICE AMT_INCOME_TOTAL
+        self.__application_test["NEW_CREDIT_TO_ANNUITY_RATIO"] = (
+            # Credit amount of the loan / Loan annuity
+            self.__application_test["AMT_CREDIT"] / self.__application_test["AMT_ANNUITY"].replace(0, np.nan)
+        )
+        self.__application_test["NEW_CREDIT_TO_GOODS_RATIO"] = (
+            # Credit amount of the loan /
+            # For consumer loans it is the price of the goods for which the loan is given
+            # 贷款总额 / 贷款购买商品的价格
+            self.__application_test["AMT_CREDIT"] / self.__application_test["AMT_GOODS_PRICE"].replace(0, np.nan)
+        )
+        self.__application_test["NEW_CREDIT_TO_INCOME_RATIO"] = (
+            self.__application_test["AMT_CREDIT"] / self.__application_test["AMT_INCOME_TOTAL"].replace(0, np.nan)
+        )
+        self.__application_test["NEW_ANNUITY_TO_INCOME_RATIO"] = (
+            self.__application_test["AMT_ANNUITY"] / self.__application_test["AMT_INCOME_TOTAL"].replace(0, np.nan)
+        )
+
+        # FLAG_DOCUMENT
+        # FLAG_OWN_CAR, FLAG_OWN_REALTY
+        # FLAG_MOBIL, FLAG_EMP_PHONE, FLAG_WORK_PHONE, FLAG_CONT_MOBILE, FLAG_PHONE, FLAG_EMAIL
+        self.__application_test["NEW_DOC_IND_SUM"] = (
+            self.__application_test[
+                [col for col in self.__application_test.columns if re.search(r"FLAG_DOCUMENT", col)]].sum(axis=1)
+        )
+        self.__application_test["NEW_DOC_IND_KURT"] = (
+            self.__application_test[
+                [col for col in self.__application_test.columns if re.search(r"FLAG_DOCUMENT", col)]].kurtosis(axis=1)
+        )
+        self.__application_test["NEW_LIVE_IND_SUM"] = (
+            self.__application_test[
+                ["FLAG_OWN_CAR", "FLAG_OWN_REALTY"]].sum(axis=1)
+        )
+        self.__application_test["NEW_LIVE_IND_KURT"] = (
+            self.__application_test[
+                ["FLAG_OWN_CAR", "FLAG_OWN_REALTY"]].kurtosis(axis=1)
+        )
+        self.__application_test["NEW_CONTACT_IND_SUM"] = (
+            self.__application_test[
+                ["FLAG_MOBIL", "FLAG_EMP_PHONE", "FLAG_WORK_PHONE", "FLAG_CONT_MOBILE", "FLAG_PHONE",
+                 "FLAG_EMAIL"]].sum(axis=1)
+        )
+        self.__application_test["NEW_CONTACT_IND_KURT"] = (
+            self.__application_test[
+                ["FLAG_MOBIL", "FLAG_EMP_PHONE", "FLAG_WORK_PHONE", "FLAG_CONT_MOBILE", "FLAG_PHONE",
+                 "FLAG_EMAIL"]].kurtosis(axis=1)
+        )
+
+        # CNT_CHILDREN
+        self.__application_test["NEW_INC_PER_CHLD"] = (
+            # 分母 + 1 防止分母为 0
+            self.__application_test["AMT_INCOME_TOTAL"] / self.__application_test["CNT_CHILDREN"].replace(0, np.nan)
+        )
+
+        # EXT_SOURCE_1, EXT_SOURCE_2, EXT_SOURCE_3
+        self.__application_test["NEW_SOURCES_PROD"] = (
+            self.__application_test["EXT_SOURCE_1"] * self.__application_test["EXT_SOURCE_2"] *
+            self.__application_test["EXT_SOURCE_3"]
+        )
+        self.__application_test["NEW_SOURCES_MEAN"] = (
+            self.__application_test[["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].median(axis=1)
+        )
+        self.__application_test["NEW_SOURCES_STD"] = self.__application_test[
+            ["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].std(axis=1)
+        self.__application_test["NEW_SOURCES_STD"] = self.__application_test["NEW_SOURCES_STD"].fillna(
+            self.__application_test["NEW_SOURCES_STD"].median())
+        self.__application_test["NEW_SOURCES_NA_SUM"] = (
+            self.__application_test["EXT_SOURCE_1"].isna().astype(np.float64) +
+            self.__application_test["EXT_SOURCE_2"].isna().astype(np.float64) +
+            self.__application_test["EXT_SOURCE_3"].isna().astype(np.float64)
+        )
+        self.__application_test["NEW_SOURCES_MIN"] = self.__application_test[
+            ["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].min(axis=1)
+        self.__application_test["NEW_SOURCES_MAX"] = self.__application_test[
+            ["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].max(axis=1)
+        self.__application_test["NEW_SOURCES_SUM"] = self.__application_test[
+            ["EXT_SOURCE_1", "EXT_SOURCE_2", "EXT_SOURCE_3"]].sum(axis=1)
+
+        # DAYS_EMPLOYED, DAYS_BIRTH, OWN_CAR_AGE DAYS_LAST_PHONE_CHANGE
+        self.__application_test["NEW_EMPLOY_TO_BIRTH_RATIO"] = (
+            # How many days before the application the person started current employment /
+            # Client's age in days at the time of application
+            # 工龄 / 年龄
+            self.__application_test["DAYS_EMPLOYED"] / self.__application_test["DAYS_BIRTH"].replace(0, np.nan)
+        )
+        self.__application_test["NEW_CAR_TO_BIRTH_RATIO"] = (
+            self.__application_test["OWN_CAR_AGE"] / self.__application_test["DAYS_BIRTH"].replace(0, np.nan)
+        )
+        self.__application_test["NEW_CAR_TO_EMPLOY_RATIO"] = (
+            self.__application_test["OWN_CAR_AGE"] / self.__application_test["DAYS_EMPLOYED"].replace(0, np.nan)
+        )
+        self.__application_test["NEW_PHONE_TO_BIRTH_RATIO"] = (
+            self.__application_test["DAYS_LAST_PHONE_CHANGE"] / self.__application_test["DAYS_BIRTH"].replace(0,
+                                                                                                                np.nan)
+        )
+        self.__application_test["NEW_PHONE_TO_EMPLOY_RATIO"] = (
+            self.__application_test["DAYS_LAST_PHONE_CHANGE"] / self.__application_test["DAYS_EMPLOYED"].replace(0,
+                                                                                                                   np.nan)
+        )
+
+        # REG_REGION_NOT_LIVE_REGION REG_REGION_NOT_WORK_REGION LIVE_REGION_NOT_WORK_REGION REG_CITY_NOT_LIVE_CITY
+        # REG_CITY_NOT_WORK_CITY LIVE_CITY_NOT_WORK_CITY
+        self.__application_test["NEW_REG_IND_SUM"] = (
+            self.__application_test[
+                ["REG_REGION_NOT_LIVE_REGION", "REG_REGION_NOT_WORK_REGION", "LIVE_REGION_NOT_WORK_REGION",
+                 "REG_CITY_NOT_LIVE_CITY", "REG_CITY_NOT_WORK_CITY", "LIVE_CITY_NOT_WORK_CITY"]].sum(axis=1)
+        )
+
+        self.__application_test["NEW_REG_IND_KURT"] = (
+            self.__application_test[
+                ["REG_REGION_NOT_LIVE_REGION", "REG_REGION_NOT_WORK_REGION", "LIVE_REGION_NOT_WORK_REGION",
+                 "REG_CITY_NOT_LIVE_CITY", "REG_CITY_NOT_WORK_CITY", "LIVE_CITY_NOT_WORK_CITY"]].kurtosis(axis=1)
+        )
+
+        # neptune.ml
+        self.__application_test["NEW_CHILDREN_RATIO"] = (
+            self.__application_test["CNT_CHILDREN"] / self.__application_test["CNT_FAM_MEMBERS"].replace(0, np.nan)
+        )
+
+        self.__application_test["NEW_INCOME_CREDIT_PERCENTAGE"] = self.__application_test["AMT_INCOME_TOTAL"] / \
+                                                                   self.__application_test["AMT_CREDIT"].replace(0,
+                                                                                                                  np.nan)
+
+        self.__application_test["NEW_INCOME_PER_PERSON"] = self.__application_test["AMT_INCOME_TOTAL"] / \
+                                                            self.__application_test["CNT_FAM_MEMBERS"].replace(0,
+                                                                                                                np.nan)
+
+        self.__application_test["NEW_PAYMENT_RATE"] = self.__application_test["AMT_ANNUITY"] / \
+                                                       self.__application_test["AMT_CREDIT"].replace(0, np.nan)
+
+        self.__application_test["NEW_CNT_NON_CHILD"] = self.__application_test["CNT_FAM_MEMBERS"] - \
+                                                        self.__application_test["CNT_CHILDREN"]
+
+        self.__application_test["NEW_CHILD_TO_NON_CHILD_RATIO"] = (
+            self.__application_test["CNT_CHILDREN"] / self.__application_test["NEW_CNT_NON_CHILD"].replace(0, np.nan)
+        )
+
+        self.__application_test["NEW_INCOME_PER_NON_CHILD"] = self.__application_test["AMT_INCOME_TOTAL"] / \
+                                                               self.__application_test["NEW_CNT_NON_CHILD"].replace(0,
+                                                                                                                     np.nan)
+
+        self.__application_test["NEW_CREDIT_PER_PERSON"] = self.__application_test["AMT_CREDIT"] / \
+                                                            self.__application_test["CNT_FAM_MEMBERS"].replace(0,
+                                                                                                                np.nan)
+        self.__application_test["NEW_CREDIT_PER_CHILD"] = self.__application_test["AMT_CREDIT"] / \
+                                                           self.__application_test["CNT_CHILDREN"].replace(0, np.nan)
+        self.__application_test["NEW_CREDIT_PER_NON_CHILD"] = self.__application_test["AMT_CREDIT"] / \
+                                                               self.__application_test["NEW_CNT_NON_CHILD"].replace(0,
+                                                                                                                     np.nan)
+
+        self.__application_test["NEW_RETIREMENT_AGE"] = (self.__application_test["DAYS_BIRTH"] < -14000).astype(int)
+        self.__application_test["NEW_LONG_EMPLOYMENT"] = (self.__application_test["DAYS_EMPLOYED"] < -2000).astype(
+            int)
+
+        NEW_AGGREGATION_RECIPIES = [
+            (["CODE_GENDER",
+              "NAME_EDUCATION_TYPE"], [("AMT_ANNUITY", "max"),
+                                       ("AMT_CREDIT", "max"),
+                                       ("EXT_SOURCE_1", "median"),
+                                       ("EXT_SOURCE_2", "median"),
+                                       ("OWN_CAR_AGE", "max"),
+                                       ("OWN_CAR_AGE", "sum"),
+                                       ("NEW_CREDIT_TO_ANNUITY_RATIO", "median"),
+                                       ("NEW_SOURCES_MEAN", "median"),
+                                       ("NEW_CREDIT_TO_GOODS_RATIO", "median"),
+                                       ("NEW_SOURCES_PROD", "median"),
+                                       ("NEW_CAR_TO_EMPLOY_RATIO", "median"),
+                                       ("NEW_PHONE_TO_BIRTH_RATIO", "median"),
+                                       ("NEW_SOURCES_STD", "median"),
+                                       ("NEW_ANNUITY_TO_INCOME_RATIO", "median"),
+                                       ("NEW_EMPLOY_TO_BIRTH_RATIO", "median"),
+                                       ("NEW_PHONE_TO_EMPLOY_RATIO", "median")]),
+
+            (["CODE_GENDER",
+              "ORGANIZATION_TYPE"], [("AMT_ANNUITY", "median"),
+                                     ("AMT_INCOME_TOTAL", "median"),
+                                     ("DAYS_REGISTRATION", "median"),
+                                     ("EXT_SOURCE_1", "median"),
+                                     ("NEW_CREDIT_TO_ANNUITY_RATIO", "median"),
+                                     ("NEW_SOURCES_MEAN", "median"),
+                                     ("NEW_CREDIT_TO_GOODS_RATIO", "median"),
+                                     ("NEW_SOURCES_PROD", "median"),
+                                     ("NEW_CAR_TO_EMPLOY_RATIO", "median"),
+                                     ("NEW_PHONE_TO_BIRTH_RATIO", "median"),
+                                     ("NEW_SOURCES_STD", "median"),
+                                     ("NEW_ANNUITY_TO_INCOME_RATIO", "median"),
+                                     ("NEW_EMPLOY_TO_BIRTH_RATIO", "median"),
+                                     ("NEW_PHONE_TO_EMPLOY_RATIO", "median")]),
+
+            (["CODE_GENDER",
+              "REG_CITY_NOT_WORK_CITY"], [("AMT_ANNUITY", "median"),
+                                          ("CNT_CHILDREN", "median"),
+                                          ("DAYS_ID_PUBLISH", "median"),
+                                          ("NEW_CREDIT_TO_ANNUITY_RATIO", "median"),
+                                          ("NEW_SOURCES_MEAN", "median"),
+                                          ("NEW_CREDIT_TO_GOODS_RATIO", "median"),
+                                          ("NEW_SOURCES_PROD", "median"),
+                                          ("NEW_CAR_TO_EMPLOY_RATIO", "median"),
+                                          ("NEW_PHONE_TO_BIRTH_RATIO", "median"),
+                                          ("NEW_SOURCES_STD", "median"),
+                                          ("NEW_ANNUITY_TO_INCOME_RATIO", "median"),
+                                          ("NEW_EMPLOY_TO_BIRTH_RATIO", "median"),
+                                          ("NEW_PHONE_TO_EMPLOY_RATIO", "median")]),
+
+            (["CODE_GENDER",
+              "NAME_EDUCATION_TYPE",
+              "OCCUPATION_TYPE",
+              "REG_CITY_NOT_WORK_CITY"], [("EXT_SOURCE_1", "median"),
+                                          ("EXT_SOURCE_2", "median"),
+                                          ("NEW_CREDIT_TO_ANNUITY_RATIO", "median"),
+                                          ("NEW_SOURCES_MEAN", "median"),
+                                          ("NEW_CREDIT_TO_GOODS_RATIO", "median"),
+                                          ("NEW_SOURCES_PROD", "median"),
+                                          ("NEW_CAR_TO_EMPLOY_RATIO", "median"),
+                                          ("NEW_PHONE_TO_BIRTH_RATIO", "median"),
+                                          ("NEW_SOURCES_STD", "median"),
+                                          ("NEW_ANNUITY_TO_INCOME_RATIO", "median"),
+                                          ("NEW_EMPLOY_TO_BIRTH_RATIO", "median"),
+                                          ("NEW_PHONE_TO_EMPLOY_RATIO", "median")]),
+            (["NAME_EDUCATION_TYPE",
+              "OCCUPATION_TYPE"], [("AMT_CREDIT", "median"),
+                                   ("AMT_REQ_CREDIT_BUREAU_YEAR", "median"),
+                                   ("APARTMENTS_AVG", "median"),
+                                   ("BASEMENTAREA_AVG", "median"),
+                                   ("EXT_SOURCE_1", "median"),
+                                   ("EXT_SOURCE_2", "median"),
+                                   ("EXT_SOURCE_3", "median"),
+                                   ("NONLIVINGAREA_AVG", "median"),
+                                   ("OWN_CAR_AGE", "median"),
+                                   ("YEARS_BUILD_AVG", "median"),
+                                   ("NEW_CREDIT_TO_ANNUITY_RATIO", "median"),
+                                   ("NEW_SOURCES_MEAN", "median"),
+                                   ("NEW_CREDIT_TO_GOODS_RATIO", "median"),
+                                   ("NEW_SOURCES_PROD", "median"),
+                                   ("NEW_CAR_TO_EMPLOY_RATIO", "median"),
+                                   ("NEW_PHONE_TO_BIRTH_RATIO", "median"),
+                                   ("NEW_SOURCES_STD", "median"),
+                                   ("NEW_ANNUITY_TO_INCOME_RATIO", "median"),
+                                   ("NEW_EMPLOY_TO_BIRTH_RATIO", "median"),
+                                   ("NEW_PHONE_TO_EMPLOY_RATIO", "median")]),
+
+            (["NAME_EDUCATION_TYPE",
+              "OCCUPATION_TYPE",
+              "REG_CITY_NOT_WORK_CITY"], [("ELEVATORS_AVG", "median"),
+                                          ("EXT_SOURCE_1", "median"),
+                                          ("NEW_CREDIT_TO_ANNUITY_RATIO", "median"),
+                                          ("NEW_SOURCES_MEAN", "median"),
+                                          ("NEW_CREDIT_TO_GOODS_RATIO", "median"),
+                                          ("NEW_SOURCES_PROD", "median"),
+                                          ("NEW_CAR_TO_EMPLOY_RATIO", "median"),
+                                          ("NEW_PHONE_TO_BIRTH_RATIO", "median"),
+                                          ("NEW_SOURCES_STD", "median"),
+                                          ("NEW_ANNUITY_TO_INCOME_RATIO", "median"),
+                                          ("NEW_EMPLOY_TO_BIRTH_RATIO", "median"),
+                                          ("NEW_PHONE_TO_EMPLOY_RATIO", "median")]),
+
+            (["OCCUPATION_TYPE"], [("AMT_ANNUITY", "median"),
+                                   ("CNT_CHILDREN", "median"),
+                                   ("CNT_FAM_MEMBERS", "median"),
+                                   ("DAYS_BIRTH", "median"),
+                                   ("DAYS_EMPLOYED", "median"),
+                                   ("DAYS_ID_PUBLISH", "median"),
+                                   ("DAYS_REGISTRATION", "median"),
+                                   ("EXT_SOURCE_1", "median"),
+                                   ("EXT_SOURCE_2", "median"),
+                                   ("EXT_SOURCE_3", "median"),
+                                   ("NEW_CREDIT_TO_ANNUITY_RATIO", "median"),
+                                   ("NEW_SOURCES_MEAN", "median"),
+                                   ("NEW_CREDIT_TO_GOODS_RATIO", "median"),
+                                   ("NEW_SOURCES_PROD", "median"),
+                                   ("NEW_CAR_TO_EMPLOY_RATIO", "median"),
+                                   ("NEW_PHONE_TO_BIRTH_RATIO", "median"),
+                                   ("NEW_SOURCES_STD", "median"),
+                                   ("NEW_ANNUITY_TO_INCOME_RATIO", "median"),
+                                   ("NEW_EMPLOY_TO_BIRTH_RATIO", "median"),
+                                   ("NEW_PHONE_TO_EMPLOY_RATIO", "median")]),
+        ]
+
+        for groupby_cols, specs in NEW_AGGREGATION_RECIPIES:
+            group_object = self.__application_test.groupby(groupby_cols)
+            for select, agg in specs:
+                groupby_aggregate_name = "{}_{}_{}_{}".format("NEW", "_".join(groupby_cols), agg, select)
+                self.__application_test = self.__application_test.merge(
+                    group_object[select]
+                        .agg(agg)
+                        .reset_index()
+                        .rename(index=str, columns={select: groupby_aggregate_name}),
+                    left_on=groupby_cols,
+                    right_on=groupby_cols,
+                    how="left"
+                )
+
+    def data_return(self):
+        # print(self.__application_test.head())
+        self.__application_test.to_csv(os.path.join(self.__input_path, "application_test_temp.csv"), index=False)
+
+        return self.__application_test
+
+
+if __name__ == "__main__":
+    pat = PrepareApplicationTest(
+        input_path="D:\\Kaggle\\Home_Credit_Default_Risk\\clean_data"
+    )
+    pat.data_prepare()
+    pat.data_transform()
+    pat.data_generate()
+    pat.data_return()
